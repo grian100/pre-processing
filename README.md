@@ -1,4 +1,4 @@
-# Pre-processing di un Dataset di Rilevazione del Tumore alSeno
+# Pre-processing di un Dataset di Rilevazione del Tumore al Seno
 Questo progetto si concentra sul pre-processing di un dataset di rilevazionedel tumore al seno, con l'obiettivo di creare un set di dati pulito e pronto per essere utilizzato nei modelli di machine learning.
 
 # Servizie e librerie utilizzate
