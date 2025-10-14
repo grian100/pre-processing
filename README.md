@@ -2,7 +2,6 @@
 Questo progetto si concentra sul pre-processing di un dataset di rilevazionedel tumore al seno, con l'obiettivo di creare un set di dati pulito e pronto per essere utilizzato nei modelli di machine learning.
 
 # Servizie e librerie utilizzate
-- Ambiente di sviluppo <strong>Google Colaboratory</strong> [https://colab.google/] piattaforma basata su cloud che consente di scrivere e eseguire codice attraverso il browser. Offre inoltre risorse computazionali gratuite, come CPU e GPU, insieme a strumenti per la scrittura, l’esecuzione e la condivisione di codice Python
 - <strong>Python==3.12.11</strong>
 - <strong>Scikit-learn==1.7.2</strong> è una libreria open source di apprendimento automatico per il linguaggio di programmazione Python. Contiene algoritmi di classificazione, regressione e clustering (raggruppamento) e macchine a vettori di supporto, regressione logistica, classificatore bayesiano, k-mean e DBSCAN
 - <strong>Pandas==2.3.3</strong>  è un pacchetto Python che fornisce strutture dati veloci, flessibili ed espressive, progettate per rendere semplice e intuitivo l'utilizzo di dati "relazionali" o "etichettati". Il suo obiettivo è quello di essere il componente fondamentale di alto livello per l'analisi pratica dei dati in Python
@@ -33,5 +32,18 @@ La fase di pre processing per analizzare il caso si passa dalla realizazione di 
      - <strong>Riscalatura mediante Normalizzazione</strong>: infine, le variabili numeriche saranno normalizzate tra 0 e 1, per uniformare la scala e facilitare il processo di apprendimento dei modelli.
 
 # Repository
-
-# Workflow
+PRE-PROCESSING/
+  - import_dataset/
+    - import.py
+  - pipeline_one/
+    - pipeline1.py
+  - pipeline_two/
+    - pipeline2.py
+  - pipeline_tree/
+    - pipeline3.py
+      
+# Miglioramenti
+- Testare diverse strategie di imputazione
+  - Provare tecniche più avanzate come KNNImputer per confrontare i risultati rispetto alla semplice media/mediana [https://scikit-learn.org/stable/modules/generated/sklearn.impute.KNNImputer.html].
+- Analizzare l’impatto della PCA
+  - Aggiungere una valutazione della varianza spiegata per determinare il numero ottimale di componenti da mantenere [https://towardsdatascience.com/principal-component-analysis-made-easy-a-step-by-step-tutorial-184f295e97fe/].
