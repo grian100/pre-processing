@@ -1,16 +1,27 @@
-"""Confronto SimpleImputer / KNNImputer e analisi della varianza spiegata dalla PCA.
+"""Confronto tra imputer (Simple, KNN, Iterative) e analisi della PCA, con regressione logistica e random forest.
 
 Le analisi usano solo il training set, perché servono a scegliere il pre-processing:
 il test set resta riservato alla valutazione finale.
 I risultati (tabelle CSV e grafici PNG) vengono salvati nella cartella reports/.
 """
 
+import os
+import re
 import sys
 import warnings
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
+
+# Avvisi attesi, silenziati anche nei processi paralleli della cross-validation (che ereditano l'ambiente):
+# - IterativeImputer con random forest non raggiunge il criterio di arresto: gli alberi rendono le stime
+#   leggermente diverse a ogni iterazione, e le 5 iterazioni previste bastano comunque
+# - la discretizzazione unisce i bin coincidenti (vedi main.py)
+EXPECTED_WARNINGS = ["[IterativeImputer] Early stopping criterion not reached", "Bins whose width are too small"]
+os.environ["PYTHONWARNINGS"] = ",".join(f"ignore:{message}" for message in EXPECTED_WARNINGS)
+for message in EXPECTED_WARNINGS:
+    warnings.filterwarnings("ignore", message=re.escape(message))
 
 import matplotlib
 
@@ -27,10 +38,12 @@ from preprocessing import (
     split_features_target,
 )
 from preprocessing.analysis import (
+    NO_PCA,
     compare_imputers,
     components_for_variance,
     elbow_components,
     imputation_error,
+    one_standard_error_components,
     pca_cv_scores,
     pca_explained_variance,
 )
@@ -61,22 +74,30 @@ def plot_explained_variance(variance, thresholds, elbow, path):
 
 
 def plot_cv_scores(scores, path):
-    fig, ax = plt.subplots(figsize=(10, 4))
-    x = scores.index
-    ax.errorbar(x, scores["ROC AUC"], yerr=scores["ROC AUC std"], marker="o", capsize=3, color="#1f4e79")
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    colors = ["#1f4e79", "#c0504d", "#4f8a3c"]
+    for color, (model, model_scores) in zip(colors, scores.groupby(level="modello")):
+        model_scores = model_scores.droplevel("modello")
+        with_pca = model_scores.drop(index=NO_PCA)
+        x = with_pca.index.astype(int)
+        ax.errorbar(x, with_pca["ROC AUC"], yerr=with_pca["ROC AUC std"], marker="o",
+                    capsize=3, color=color, label=model)
+        ax.axhline(model_scores.loc[NO_PCA, "ROC AUC"], color=color, linestyle="--", linewidth=1,
+                   label=f"{model} senza PCA")
     ax.set_xlabel("Numero di componenti PCA")
     ax.set_ylabel("ROC AUC (CV a 5 fold)")
-    ax.set_title("Regressione logistica sulle componenti della pipeline 3")
+    ax.set_title("Modelli sulle componenti della pipeline 3")
     ax.set_xticks(list(x))
     ax.grid(alpha=0.3)
+    ax.legend(loc="lower right")
     fig.tight_layout()
     fig.savefig(path, dpi=120)
     plt.close(fig)
 
 
 def main():
-    warnings.filterwarnings("ignore", message="Bins whose width are too small")
-    pd.set_option("display.width", 120)
+    pd.set_option("display.width", 160)
+    pd.set_option("display.max_columns", None)
     pd.set_option("display.float_format", "{:.4f}".format)
     REPORTS.mkdir(exist_ok=True)
 
@@ -94,9 +115,10 @@ def main():
     print(errors, "\n")
 
     scores = compare_imputers(X_train, y_train, symmetric, asymmetric, categorical, random_state=RANDOM_STATE)
-    print("Regressione logistica con il pre-processing della pipeline 1 (CV a 5 fold):")
+    print("Modelli con il pre-processing della pipeline 1 (CV a 5 fold):")
     print(scores, "\n")
-    errors.join(scores).to_csv(REPORTS / "confronto_imputer.csv")
+    errors.to_csv(REPORTS / "imputer_ricostruzione.csv")
+    scores.to_csv(REPORTS / "imputer_modelli.csv")
 
     print("=== Analisi della PCA ===\n")
     variance = pca_explained_variance(X_train, symmetric, asymmetric)
@@ -111,14 +133,14 @@ def main():
 
     components = list(range(1, max(thresholds.values()) + 1))
     cv_scores = pca_cv_scores(X_train, y_train, symmetric, asymmetric, components, random_state=RANDOM_STATE)
-    best = cv_scores["ROC AUC"].idxmax()
-    # Il numero minimo di componenti il cui punteggio è entro una deviazione standard dal migliore
-    threshold = cv_scores.loc[best, "ROC AUC"] - cv_scores.loc[best, "ROC AUC std"]
-    parsimonious = cv_scores.index[cv_scores["ROC AUC"] >= threshold][0]
     print("ROC AUC al variare delle componenti (CV a 5 fold):")
-    print(cv_scores, "\n")
-    print(f"Miglior ROC AUC con {best} componenti; "
-          f"con la regola di una deviazione standard ne bastano {parsimonious}.")
+    print(cv_scores.unstack("modello"), "\n")
+    for model, model_scores in cv_scores.groupby(level="modello"):
+        model_scores = model_scores.droplevel("modello")
+        best, parsimonious = one_standard_error_components(model_scores)
+        print(f"{model}: miglior ROC AUC con {best} componenti "
+              f"({model_scores.loc[best, 'ROC AUC']:.4f}, senza PCA {model_scores.loc[NO_PCA, 'ROC AUC']:.4f}); "
+              f"con la regola di una deviazione standard ne bastano {parsimonious}.")
     cv_scores.to_csv(REPORTS / "pca_roc_auc.csv")
     plot_cv_scores(cv_scores, REPORTS / "pca_roc_auc.png")
 

@@ -47,12 +47,12 @@ pre-processing/
 ├── src/preprocessing/
 │   ├── data.py         # caricamento del dataset e individuazione delle colonne
 │   ├── pipelines.py    # costruzione delle tre pipeline
-│   └── analysis.py     # confronto tra imputer e analisi della PCA
+│   └── analysis.py     # confronto tra imputer (Simple, KNN, Iterative) e analisi della PCA
 ├── tests/
 │   └── test_pipelines.py
 ├── eda.py              # analisi esplorativa (describe, istogrammi, skewness)
 ├── main.py             # split train/test ed esecuzione delle pipeline
-├── analysis.py         # confronto SimpleImputer/KNNImputer e analisi PCA (risultati in reports/)
+├── analysis.py         # confronto tra imputer e analisi PCA con due modelli (risultati in reports/)
 ├── requirements.txt
 └── pytest.ini
 ```
@@ -67,24 +67,32 @@ pytest             # test
 ```
 
 # Confronto tra strategie di imputazione
-Ogni pipeline accetta il parametro `numeric_imputer`. Di default usa `SimpleImputer` (media per le variabili simmetriche, mediana per le asimmetriche); passando per esempio `KNNImputer(n_neighbors=5)` l'imputazione diventa multivariata. In quel caso le variabili vengono prima standardizzate, perché il KNN si basa sulle distanze tra i record.
+Ogni pipeline accetta il parametro `numeric_imputer`. Di default usa `SimpleImputer` (media per le variabili simmetriche, mediana per le asimmetriche); passando un imputer multivariato l'imputazione tiene conto delle altre variabili:
+- `KNNImputer`: usa la media dei k record più simili. Le variabili vengono prima standardizzate, perché il KNN si basa sulle distanze tra i record.
+- `IterativeImputer`: stima ogni variabile con una regressione sulle altre, ripetendo il ciclo più volte. È stato provato sia con `BayesianRidge` (regressione lineare, il default) sia con una random forest.
 
-`analysis.py` confronta le due strategie sul solo training set, in due modi:
-1. <strong>Ricostruzione dei valori</strong>: il 10% dei valori noti viene nascosto e poi imputato; l'errore è misurato in deviazioni standard.
-2. <strong>Effetto sul modello</strong>: regressione logistica con il pre-processing della pipeline 1, valutata con una cross-validation a 5 fold.
+`analysis.py` confronta le strategie sul solo training set, in due modi:
+1. <strong>Ricostruzione dei valori</strong>: il 10% dei valori noti viene nascosto e poi imputato; l'errore (RMSE) è misurato in deviazioni standard.
+2. <strong>Effetto sul modello</strong>: due modelli molto diversi, una regressione logistica (lineare) e una random forest (ad alberi, 300 alberi), con il pre-processing della pipeline 1 e una cross-validation a 5 fold.
 
-| Imputer | RMSE ricostruzione | ROC AUC (CV) | Accuracy (CV) |
+| Imputer | RMSE ricostruzione | ROC AUC regressione logistica | ROC AUC random forest |
 |---|---|---|---|
-| SimpleImputer (media/mediana) | 1.127 | 0.995 ± 0.004 | 0.971 |
-| KNNImputer (k=3) | 0.737 | 0.995 ± 0.004 | 0.967 |
-| KNNImputer (k=5) | 0.722 | 0.995 ± 0.005 | 0.971 |
-| KNNImputer (k=5, pesato per distanza) | 0.719 | 0.995 ± 0.005 | 0.969 |
-| KNNImputer (k=10) | <strong>0.714</strong> | 0.995 ± 0.005 | 0.969 |
+| SimpleImputer (media/mediana) | 1.127 | <strong>0.995</strong> ± 0.004 | 0.990 ± 0.007 |
+| KNNImputer (k=3) | 0.737 | 0.995 ± 0.004 | 0.990 ± 0.009 |
+| KNNImputer (k=5) | 0.722 | 0.995 ± 0.005 | 0.990 ± 0.007 |
+| KNNImputer (k=5, pesato per distanza) | 0.719 | 0.995 ± 0.005 | 0.991 ± 0.007 |
+| KNNImputer (k=10) | 0.714 | 0.995 ± 0.005 | <strong>0.991</strong> ± 0.006 |
+| IterativeImputer (random forest) | 0.611 | 0.994 ± 0.006 | 0.989 ± 0.008 |
+| IterativeImputer (BayesianRidge) | <strong>0.537</strong> | 0.994 ± 0.005 | 0.991 ± 0.007 |
 
-<strong>Conclusione</strong>: il KNNImputer ricostruisce i valori mancanti molto meglio (errore ridotto di circa il 35%), perché sfrutta la forte correlazione tra le variabili (es. raggio, perimetro e area). Sulla classificazione però la differenza è nulla: tutte le strategie sono entro una deviazione standard l'una dall'altra. Le pipeline mantengono quindi il `SimpleImputer`, più semplice e veloce; il KNNImputer è preferibile quando servono valori imputati realistici (es. per analisi descrittive).
+<strong>Conclusioni</strong>:
+- L'<strong>IterativeImputer con BayesianRidge</strong> ricostruisce i valori mancanti meglio di tutti: errore ridotto di circa il 52% rispetto al SimpleImputer e di circa il 25% rispetto al KNN. Le variabili sono legate da relazioni quasi lineari (es. raggio, perimetro e area), che una regressione cattura bene. La versione con random forest è più lenta e meno precisa.
+- Sulla classificazione le differenze sono trascurabili <strong>con entrambi i modelli</strong>: tutte le strategie sono entro una deviazione standard l'una dall'altra, e la classifica cambia da un modello all'altro. La conclusione quindi non dipende dal modello.
+- Le pipeline mantengono il `SimpleImputer`, più semplice e veloce. L'IterativeImputer è la scelta migliore quando servono valori imputati realistici (es. per analisi descrittive o per pubblicare il dataset pulito).
+- La regressione logistica supera la random forest (0.995 contro 0.990): dopo la simmetrizzazione e la standardizzazione le due classi sono separabili quasi linearmente.
 
 # Analisi della PCA
-`analysis.py` fitta la PCA della pipeline 3 con tutte le componenti e calcola la varianza cumulata, il "gomito" della curva e la ROC AUC in cross-validation di una regressione logistica al variare del numero di componenti. I grafici vengono salvati in `reports/pca_varianza.png` e `reports/pca_roc_auc.png`.
+`analysis.py` fitta la PCA della pipeline 3 con tutte le componenti e calcola la varianza cumulata, il "gomito" della curva e la ROC AUC in cross-validation dei due modelli al variare del numero di componenti, confrontandola con gli stessi modelli senza PCA. I grafici vengono salvati in `reports/pca_varianza.png` e `reports/pca_roc_auc.png`.
 
 | Varianza spiegata | Componenti necessarie |
 |---|---|
@@ -93,12 +101,22 @@ Ogni pipeline accetta il parametro `numeric_imputer`. Di default usa `SimpleImpu
 | 95% | 20 |
 | 99% | 26 (su 29) |
 
-- Il gomito della curva cumulata si trova a <strong>7 componenti</strong>.
-- La ROC AUC passa da 0.970 con 1 componente a 0.993 con 6, poi resta stabile intorno a 0.994: il valore massimo (0.995 con 21 componenti) non è significativamente migliore.
-- Con la regola di una deviazione standard (il minor numero di componenti con un punteggio entro una deviazione standard dal migliore) bastano <strong>6 componenti</strong>.
+Il gomito della curva cumulata si trova a <strong>7 componenti</strong>.
 
-<strong>Conclusione</strong>: la soglia dell'80% (8 componenti) usata nella pipeline 3 è una buona scelta: coincide quasi con il gomito della curva e conserva tutta l'informazione utile alla classificazione, riducendo le variabili da 29 a 8.
+| | Regressione logistica | Random forest |
+|---|---|---|
+| ROC AUC con 1 componente | 0.970 | 0.941 |
+| ROC AUC con 8 componenti (80% della varianza) | 0.994 | 0.989 |
+| ROC AUC migliore | 0.995 (21 componenti) | 0.990 (9 componenti) |
+| ROC AUC senza PCA (29 variabili) | 0.995 | 0.988 |
+| Componenti sufficienti (regola di una deviazione standard) | 6 | 6 |
 
-# Possibili sviluppi
-- Provare `IterativeImputer` (imputazione multivariata basata su regressione) nello stesso confronto.
-- Valutare altri modelli (es. random forest) per verificare che le conclusioni non dipendano dalla regressione logistica.
+La regola di una deviazione standard sceglie il minor numero di componenti il cui punteggio è entro una deviazione standard dal migliore.
+
+- Con entrambi i modelli la ROC AUC cresce rapidamente fino a 6–8 componenti e poi si stabilizza.
+- Per la random forest aggiungere componenti oltre la 13ª peggiora leggermente il risultato (fino a 0.983): le ultime componenti contengono soprattutto rumore, su cui gli alberi tendono a fare overfitting.
+- La PCA non migliora la regressione logistica (0.994 contro 0.995 senza PCA), mentre con 8–9 componenti la random forest è in linea o leggermente meglio che senza PCA.
+
+<strong>Conclusione</strong>: la soglia dell'80% (8 componenti) usata nella pipeline 3 è una buona scelta anche con la random forest. Coincide quasi con il gomito della curva, cade nel tratto in cui entrambi i modelli raggiungono il massimo e riduce le variabili da 29 a 8 senza perdere informazione utile. La PCA serve quindi a ridurre la dimensionalità, non ad aumentare l'accuratezza.
+
+Nota: l'esecuzione completa di `analysis.py` richiede alcuni minuti, soprattutto per la random forest e l'IterativeImputer con random forest.

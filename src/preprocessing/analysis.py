@@ -1,9 +1,16 @@
-"""Confronto tra strategie di imputazione e analisi della varianza spiegata dalla PCA."""
+"""Confronto tra strategie di imputazione e analisi della varianza spiegata dalla PCA.
+
+Le valutazioni vengono ripetute con due modelli molto diversi (regressione logistica, lineare,
+e random forest, ad alberi) per verificare che le conclusioni non dipendano dal modello.
+"""
 
 import numpy as np
 import pandas as pd
+from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
-from sklearn.impute import KNNImputer, SimpleImputer
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.experimental import enable_iterative_imputer  # noqa: F401 (abilita IterativeImputer)
+from sklearn.impute import IterativeImputer, KNNImputer, SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold, cross_validate
 from sklearn.pipeline import Pipeline
@@ -12,9 +19,10 @@ from sklearn.preprocessing import StandardScaler
 from .pipelines import build_pipeline_1, build_pipeline_3
 
 SIMPLE = "SimpleImputer (media/mediana)"
+NO_PCA = "senza PCA"
 
 
-def default_imputers():
+def default_imputers(random_state=42):
     """Strategie da confrontare: None indica il SimpleImputer media/mediana delle pipeline."""
     return {
         SIMPLE: None,
@@ -22,15 +30,30 @@ def default_imputers():
         "KNNImputer (k=5)": KNNImputer(n_neighbors=5),
         "KNNImputer (k=10)": KNNImputer(n_neighbors=10),
         "KNNImputer (k=5, pesato)": KNNImputer(n_neighbors=5, weights="distance"),
+        # Stima ogni variabile con una regressione sulle altre, ripetendo il ciclo più volte
+        "IterativeImputer (BayesianRidge)": IterativeImputer(max_iter=50, tol=1e-2, random_state=random_state),
+        "IterativeImputer (random forest)": IterativeImputer(
+            estimator=RandomForestRegressor(n_estimators=30, max_depth=10, random_state=random_state),
+            max_iter=5,
+            random_state=random_state,
+        ),
     }
 
 
-def _classifier():
-    return LogisticRegression(max_iter=5000)
+def default_models(random_state=42):
+    """Modelli con cui valutare il pre-processing."""
+    return {
+        "Regressione logistica": LogisticRegression(max_iter=5000),
+        "Random forest": RandomForestClassifier(n_estimators=300, random_state=random_state),
+    }
 
 
 def _cv(random_state):
     return StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
+
+
+def _clone(estimator):
+    return None if estimator is None else clone(estimator)
 
 
 def imputation_error(X, symmetric, asymmetric, imputers=None, mask_fraction=0.1, random_state=42):
@@ -39,7 +62,7 @@ def imputation_error(X, symmetric, asymmetric, imputers=None, mask_fraction=0.1,
     L'errore (RMSE) è calcolato sulle variabili standardizzate, così è confrontabile tra colonne:
     1.0 equivale a sbagliare di una deviazione standard.
     """
-    imputers = default_imputers() if imputers is None else imputers
+    imputers = default_imputers(random_state) if imputers is None else imputers
     numeric = list(symmetric) + list(asymmetric)
     X_true = X[numeric].to_numpy(dtype=float)
 
@@ -59,7 +82,7 @@ def imputation_error(X, symmetric, asymmetric, imputers=None, mask_fraction=0.1,
                 ("simmetriche", SimpleImputer(strategy="mean"), list(range(n_sym))),
                 ("asimmetriche", SimpleImputer(strategy="median"), list(range(n_sym, len(numeric)))),
             ])
-        Z_imputed = imputer.fit_transform(Z_masked)
+        Z_imputed = clone(imputer).fit_transform(Z_masked)
         errors = Z_imputed[hidden] - Z_true[hidden]
         rows.append({
             "imputer": name,
@@ -69,27 +92,36 @@ def imputation_error(X, symmetric, asymmetric, imputers=None, mask_fraction=0.1,
     return pd.DataFrame(rows).set_index("imputer").sort_values("RMSE")
 
 
-def compare_imputers(X, y, symmetric, asymmetric, categorical, imputers=None, random_state=42):
-    """Valuta ogni imputer con una cross-validation a 5 fold di una regressione logistica.
+def compare_imputers(X, y, symmetric, asymmetric, categorical, imputers=None, models=None, random_state=42):
+    """Valuta ogni combinazione modello/imputer con una cross-validation a 5 fold.
 
     Il pre-processing è quello della pipeline 1, rifittato in ogni fold insieme al modello.
     """
-    imputers = default_imputers() if imputers is None else imputers
+    imputers = default_imputers(random_state) if imputers is None else imputers
+    models = default_models(random_state) if models is None else models
     rows = []
-    for name, imputer in imputers.items():
-        model = Pipeline([
-            ("preprocessing", build_pipeline_1(symmetric, asymmetric, categorical, numeric_imputer=imputer)),
-            ("model", _classifier()),
-        ])
-        scores = cross_validate(model, X, y, cv=_cv(random_state), scoring=["roc_auc", "accuracy", "f1"])
-        rows.append({
-            "imputer": name,
-            "ROC AUC": scores["test_roc_auc"].mean(),
-            "ROC AUC std": scores["test_roc_auc"].std(),
-            "accuracy": scores["test_accuracy"].mean(),
-            "F1": scores["test_f1"].mean(),
-        })
-    return pd.DataFrame(rows).set_index("imputer").sort_values("ROC AUC", ascending=False)
+    for model_name, estimator in models.items():
+        for name, imputer in imputers.items():
+            model = Pipeline([
+                ("preprocessing", build_pipeline_1(symmetric, asymmetric, categorical,
+                                                   numeric_imputer=_clone(imputer))),
+                ("model", clone(estimator)),
+            ])
+            scores = cross_validate(model, X, y, cv=_cv(random_state),
+                                    scoring=["roc_auc", "accuracy", "f1"], n_jobs=-1)
+            rows.append({
+                "modello": model_name,
+                "imputer": name,
+                "ROC AUC": scores["test_roc_auc"].mean(),
+                "ROC AUC std": scores["test_roc_auc"].std(),
+                "accuracy": scores["test_accuracy"].mean(),
+                "F1": scores["test_f1"].mean(),
+            })
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["modello", "ROC AUC"], ascending=[True, False])
+        .set_index(["modello", "imputer"])
+    )
 
 
 def pca_explained_variance(X, symmetric, asymmetric, numeric_imputer=None):
@@ -121,18 +153,37 @@ def elbow_components(variance):
     return int(x[np.argmax(distances)])
 
 
-def pca_cv_scores(X, y, symmetric, asymmetric, components, numeric_imputer=None, random_state=42):
-    """ROC AUC in cross-validation di una regressione logistica al variare delle componenti PCA."""
+def pca_cv_scores(X, y, symmetric, asymmetric, components, numeric_imputer=None, models=None, random_state=42):
+    """ROC AUC in cross-validation di ogni modello al variare delle componenti PCA.
+
+    Oltre alle componenti richieste valuta ogni modello anche senza PCA (riga NO_PCA),
+    con le stesse variabili imputate e scalate ma non ruotate né ridotte.
+    """
+    models = default_models(random_state) if models is None else models
     rows = []
-    for n in components:
-        model = Pipeline([
-            ("preprocessing", build_pipeline_3(symmetric, asymmetric, n_components=n, numeric_imputer=numeric_imputer)),
-            ("model", _classifier()),
-        ])
-        scores = cross_validate(model, X, y, cv=_cv(random_state), scoring="roc_auc")
-        rows.append({
-            "componenti": n,
-            "ROC AUC": scores["test_score"].mean(),
-            "ROC AUC std": scores["test_score"].std(),
-        })
-    return pd.DataFrame(rows).set_index("componenti")
+    for model_name, estimator in models.items():
+        for n in [NO_PCA] + list(components):
+            preprocessing = build_pipeline_3(
+                symmetric, asymmetric,
+                n_components=None if n == NO_PCA else n,
+                numeric_imputer=_clone(numeric_imputer),
+            )
+            if n == NO_PCA:
+                preprocessing = Pipeline(preprocessing.steps[:1])
+            model = Pipeline([("preprocessing", preprocessing), ("model", clone(estimator))])
+            scores = cross_validate(model, X, y, cv=_cv(random_state), scoring="roc_auc", n_jobs=-1)
+            rows.append({
+                "modello": model_name,
+                "componenti": n,
+                "ROC AUC": scores["test_score"].mean(),
+                "ROC AUC std": scores["test_score"].std(),
+            })
+    return pd.DataFrame(rows).set_index(["modello", "componenti"])
+
+
+def one_standard_error_components(scores):
+    """Per un singolo modello: componenti con la miglior ROC AUC e minimo numero entro una deviazione standard."""
+    scores = scores.drop(index=NO_PCA, errors="ignore")
+    best = scores["ROC AUC"].idxmax()
+    threshold = scores.loc[best, "ROC AUC"] - scores.loc[best, "ROC AUC std"]
+    return best, scores.index[scores["ROC AUC"] >= threshold][0]

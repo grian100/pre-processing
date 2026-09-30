@@ -1,7 +1,10 @@
 import numpy as np
 import pytest
 from sklearn.datasets import load_breast_cancer
-from sklearn.impute import KNNImputer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.experimental import enable_iterative_imputer  # noqa: F401
+from sklearn.impute import IterativeImputer, KNNImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 
 from preprocessing import (
@@ -14,14 +17,23 @@ from preprocessing import (
     split_features_target,
 )
 from preprocessing.analysis import (
+    NO_PCA,
+    SIMPLE,
     compare_imputers,
     components_for_variance,
     default_imputers,
+    default_models,
     elbow_components,
     imputation_error,
+    one_standard_error_components,
     pca_cv_scores,
     pca_explained_variance,
 )
+
+FAST_MODELS = {
+    "logistica": LogisticRegression(max_iter=5000),
+    "forest": RandomForestClassifier(n_estimators=20, random_state=0),
+}
 
 
 @pytest.fixture(scope="module")
@@ -89,16 +101,19 @@ def test_pipeline_3(dataset, columns):
     assert pipeline.transform(X_test).shape == (len(X_test), pca.n_components_)
 
 
+
 @pytest.mark.parametrize("build", ["1", "2", "3"])
-def test_pipelines_with_knn_imputer(dataset, columns, build):
+@pytest.mark.parametrize("imputer_name", ["knn", "iterative"])
+def test_pipelines_with_multivariate_imputer(dataset, columns, build, imputer_name):
     X_train, X_test, y_train, _ = dataset
     symmetric, asymmetric, categorical = columns
+    imputer = KNNImputer() if imputer_name == "knn" else IterativeImputer(random_state=0)
     if build == "1":
-        pipeline = build_pipeline_1(symmetric, asymmetric, categorical, numeric_imputer=KNNImputer())
+        pipeline = build_pipeline_1(symmetric, asymmetric, categorical, numeric_imputer=imputer)
     elif build == "2":
-        pipeline = build_pipeline_2(symmetric, asymmetric, categorical, numeric_imputer=KNNImputer())
+        pipeline = build_pipeline_2(symmetric, asymmetric, categorical, numeric_imputer=imputer)
     else:
-        pipeline = build_pipeline_3(symmetric, asymmetric, numeric_imputer=KNNImputer())
+        pipeline = build_pipeline_3(symmetric, asymmetric, numeric_imputer=imputer)
     out = pipeline.fit(X_train, y_train).transform(X_test)
     assert len(out) == len(X_test)
     assert not np.isnan(out).any()
@@ -110,14 +125,20 @@ def test_imputation_error(dataset, columns):
     errors = imputation_error(X_train, symmetric, asymmetric)
     assert set(errors.index) == set(default_imputers())
     assert (errors["RMSE"] > 0).all()
+    # Gli imputer multivariati sfruttano la correlazione tra le variabili
+    assert errors["RMSE"].idxmax() == SIMPLE
 
 
 def test_compare_imputers(dataset, columns):
     X_train, _, y_train, _ = dataset
-    imputers = {"simple": None, "knn": KNNImputer()}
-    scores = compare_imputers(X_train, y_train, *columns, imputers=imputers)
-    assert set(scores.index) == {"simple", "knn"}
+    imputers = {"simple": None, "knn": KNNImputer(), "iterative": IterativeImputer(random_state=0)}
+    scores = compare_imputers(X_train, y_train, *columns, imputers=imputers, models=FAST_MODELS)
+    assert set(scores.index) == {(m, i) for m in FAST_MODELS for i in imputers}
     assert scores["ROC AUC"].between(0.5, 1).all()
+
+
+def test_default_models():
+    assert set(default_models()) == {"Regressione logistica", "Random forest"}
 
 
 def test_pca_analysis(dataset, columns):
@@ -133,5 +154,9 @@ def test_pca_analysis(dataset, columns):
     assert cumulative.loc[thresholds[0.8]] >= 0.8 > cumulative.loc[thresholds[0.8] - 1]
     assert 1 <= elbow_components(variance) <= len(variance)
 
-    scores = pca_cv_scores(X_train, y_train, symmetric, asymmetric, [1, 5])
-    assert list(scores.index) == [1, 5]
+    scores = pca_cv_scores(X_train, y_train, symmetric, asymmetric, [1, 5], models=FAST_MODELS)
+    assert set(scores.index) == {(m, n) for m in FAST_MODELS for n in [NO_PCA, 1, 5]}
+    for model in FAST_MODELS:
+        best, parsimonious = one_standard_error_components(scores.loc[model])
+        assert best in (1, 5) and parsimonious <= best
+
