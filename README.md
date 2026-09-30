@@ -6,7 +6,7 @@ Questo progetto si concentra sul pre-processing di un dataset di rilevazione del
 - <strong>Scikit-learn==1.7.2</strong> è una libreria open source di apprendimento automatico per il linguaggio di programmazione Python. Contiene algoritmi di classificazione, regressione e clustering (raggruppamento) e macchine a vettori di supporto, regressione logistica, classificatore bayesiano, k-mean e DBSCAN
 - <strong>Pandas==2.3.3</strong> è un pacchetto Python che fornisce strutture dati veloci, flessibili ed espressive, progettate per rendere semplice e intuitivo l'utilizzo di dati "relazionali" o "etichettati". Il suo obiettivo è quello di essere il componente fondamentale di alto livello per l'analisi pratica dei dati in Python
 - <strong>Numpy==2.3.3</strong> offre funzioni matematiche complete, generatori di numeri casuali, routine di algebra lineare, trasformate di Fourier e molto altro
-- <strong>Matplotlib</strong> per gli istogrammi dell'analisi esplorativa e <strong>pytest</strong> per i test
+- <strong>Matplotlib</strong> per i grafici, <strong>JupyterLab</strong> per il notebook dei risultati e <strong>pytest</strong> per i test
 
 # Il dataset
 - 569 record, 30 feature e la colonna `target`.
@@ -50,6 +50,8 @@ pre-processing/
 │   └── analysis.py     # confronto tra imputer (Simple, KNN, Iterative) e analisi della PCA
 ├── tests/
 │   └── test_pipelines.py
+├── notebooks/
+│   └── risultati.ipynb # notebook con tutti i risultati, grafici e conclusioni
 ├── eda.py              # analisi esplorativa (describe, istogrammi, skewness)
 ├── main.py             # split train/test ed esecuzione delle pipeline
 ├── analysis.py         # confronto tra imputer e analisi PCA con due modelli (risultati in reports/)
@@ -64,7 +66,10 @@ python eda.py      # analisi esplorativa
 python main.py     # esecuzione delle tre pipeline
 python analysis.py # confronto tra imputer e analisi della PCA
 pytest             # test
+jupyter lab notebooks/risultati.ipynb  # notebook con i risultati
 ```
+
+Il notebook [`notebooks/risultati.ipynb`](notebooks/risultati.ipynb) è salvato già eseguito, quindi grafici e tabelle si possono consultare direttamente su GitHub. Raccoglie in un unico percorso l'esplorazione del dataset, l'output delle tre pipeline, il confronto tra imputer e l'analisi della PCA.
 
 # Confronto tra strategie di imputazione
 Ogni pipeline accetta il parametro `numeric_imputer`. Di default usa `SimpleImputer` (media per le variabili simmetriche, mediana per le asimmetriche); passando un imputer multivariato l'imputazione tiene conto delle altre variabili:
