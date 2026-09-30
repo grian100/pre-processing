@@ -46,11 +46,13 @@ La fase di pre-processing prevede tre tipi di pipeline:
 pre-processing/
 ├── src/preprocessing/
 │   ├── data.py         # caricamento del dataset e individuazione delle colonne
-│   └── pipelines.py    # costruzione delle tre pipeline
+│   ├── pipelines.py    # costruzione delle tre pipeline
+│   └── analysis.py     # confronto tra imputer e analisi della PCA
 ├── tests/
 │   └── test_pipelines.py
 ├── eda.py              # analisi esplorativa (describe, istogrammi, skewness)
 ├── main.py             # split train/test ed esecuzione delle pipeline
+├── analysis.py         # confronto SimpleImputer/KNNImputer e analisi PCA (risultati in reports/)
 ├── requirements.txt
 └── pytest.ini
 ```
@@ -60,11 +62,43 @@ pre-processing/
 pip install -r requirements.txt
 python eda.py      # analisi esplorativa
 python main.py     # esecuzione delle tre pipeline
+python analysis.py # confronto tra imputer e analisi della PCA
 pytest             # test
 ```
 
-# Miglioramenti
-- Testare diverse strategie di imputazione
-  - Provare tecniche più avanzate come KNNImputer per confrontare i risultati rispetto alla semplice media/mediana [https://scikit-learn.org/stable/modules/generated/sklearn.impute.KNNImputer.html].
-- Analizzare l'impatto della PCA
-  - Aggiungere una valutazione della varianza spiegata per determinare il numero ottimale di componenti da mantenere [https://towardsdatascience.com/principal-component-analysis-made-easy-a-step-by-step-tutorial-184f295e97fe/].
+# Confronto tra strategie di imputazione
+Ogni pipeline accetta il parametro `numeric_imputer`. Di default usa `SimpleImputer` (media per le variabili simmetriche, mediana per le asimmetriche); passando per esempio `KNNImputer(n_neighbors=5)` l'imputazione diventa multivariata. In quel caso le variabili vengono prima standardizzate, perché il KNN si basa sulle distanze tra i record.
+
+`analysis.py` confronta le due strategie sul solo training set, in due modi:
+1. <strong>Ricostruzione dei valori</strong>: il 10% dei valori noti viene nascosto e poi imputato; l'errore è misurato in deviazioni standard.
+2. <strong>Effetto sul modello</strong>: regressione logistica con il pre-processing della pipeline 1, valutata con una cross-validation a 5 fold.
+
+| Imputer | RMSE ricostruzione | ROC AUC (CV) | Accuracy (CV) |
+|---|---|---|---|
+| SimpleImputer (media/mediana) | 1.127 | 0.995 ± 0.004 | 0.971 |
+| KNNImputer (k=3) | 0.737 | 0.995 ± 0.004 | 0.967 |
+| KNNImputer (k=5) | 0.722 | 0.995 ± 0.005 | 0.971 |
+| KNNImputer (k=5, pesato per distanza) | 0.719 | 0.995 ± 0.005 | 0.969 |
+| KNNImputer (k=10) | <strong>0.714</strong> | 0.995 ± 0.005 | 0.969 |
+
+<strong>Conclusione</strong>: il KNNImputer ricostruisce i valori mancanti molto meglio (errore ridotto di circa il 35%), perché sfrutta la forte correlazione tra le variabili (es. raggio, perimetro e area). Sulla classificazione però la differenza è nulla: tutte le strategie sono entro una deviazione standard l'una dall'altra. Le pipeline mantengono quindi il `SimpleImputer`, più semplice e veloce; il KNNImputer è preferibile quando servono valori imputati realistici (es. per analisi descrittive).
+
+# Analisi della PCA
+`analysis.py` fitta la PCA della pipeline 3 con tutte le componenti e calcola la varianza cumulata, il "gomito" della curva e la ROC AUC in cross-validation di una regressione logistica al variare del numero di componenti. I grafici vengono salvati in `reports/pca_varianza.png` e `reports/pca_roc_auc.png`.
+
+| Varianza spiegata | Componenti necessarie |
+|---|---|
+| 80% | 8 |
+| 90% | 14 |
+| 95% | 20 |
+| 99% | 26 (su 29) |
+
+- Il gomito della curva cumulata si trova a <strong>7 componenti</strong>.
+- La ROC AUC passa da 0.970 con 1 componente a 0.993 con 6, poi resta stabile intorno a 0.994: il valore massimo (0.995 con 21 componenti) non è significativamente migliore.
+- Con la regola di una deviazione standard (il minor numero di componenti con un punteggio entro una deviazione standard dal migliore) bastano <strong>6 componenti</strong>.
+
+<strong>Conclusione</strong>: la soglia dell'80% (8 componenti) usata nella pipeline 3 è una buona scelta: coincide quasi con il gomito della curva e conserva tutta l'informazione utile alla classificazione, riducendo le variabili da 29 a 8.
+
+# Possibili sviluppi
+- Provare `IterativeImputer` (imputazione multivariata basata su regressione) nello stesso confronto.
+- Valutare altri modelli (es. random forest) per verificare che le conclusioni non dipendano dalla regressione logistica.
